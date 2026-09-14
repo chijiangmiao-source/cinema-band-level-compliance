@@ -19,6 +19,8 @@ A_WEIGHTS_DB: dict[int, Decimal] = {
 
 FREQUENCIES_HZ: tuple[int, ...] = tuple(A_WEIGHTS_DB)
 
+_LN10 = math.log(10.0)
+
 
 def weighted_level_db(level_db: Decimal, frequency_hz: int) -> Decimal:
     """L_i + A_i for one band, computed with exact decimal arithmetic."""
@@ -28,6 +30,23 @@ def weighted_level_db(level_db: Decimal, frequency_hz: int) -> Decimal:
 def band_energy(weighted_db: Decimal) -> float:
     """Linear energy-like contribution of a band: 10 ** (L / 10)."""
     return 10.0 ** (float(weighted_db) / 10.0)
+
+
+def subtract_background_db(level_db: Decimal, background_db: Decimal) -> float | None:
+    """Residual band level after subtracting the background's linear energy:
+    10*log10(10**(L/10) - 10**(B/10)). Requires B < L.
+
+    Computed as L + 10*log10(1 - 10**((B-L)/10)) via expm1, which stays
+    accurate when L and B are close. Returns None when the two levels are
+    indistinguishable at float resolution, i.e. there is no positive
+    residual energy to take the logarithm of.
+    """
+    level = float(level_db)
+    background = float(background_db)
+    residual_ratio = -math.expm1((background - level) * (_LN10 / 10.0))
+    if residual_ratio <= 0.0:
+        return None
+    return level + 10.0 * math.log10(residual_ratio)
 
 
 def combine_levels(levels_db: dict[int, Decimal]) -> float:

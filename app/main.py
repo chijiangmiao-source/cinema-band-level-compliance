@@ -62,6 +62,9 @@ async def healthz() -> dict[str, str]:
 @app.post(
     "/api/v1/assessments",
     response_model=AssessmentResponse,
+    # Bands carry background/corrected levels only when a background file
+    # was uploaded; omitting them keeps the legacy response shape intact.
+    response_model_exclude_none=True,
     responses={
         413: {"model": ErrorResponse, "description": "CSV larger than 64 KiB"},
         422: {"model": ErrorResponse, "description": "Validation failure"},
@@ -70,6 +73,11 @@ async def healthz() -> dict[str, str]:
 async def create_assessment(
     file: UploadFile | None = File(
         default=None, description="UTF-8 CSV, at most 64 KiB"
+    ),
+    background_file: UploadFile | None = File(
+        default=None,
+        description="Optional UTF-8 CSV of background octave-band levels "
+        "(same contract as 'file'), subtracted band-by-band in linear energy",
     ),
     limit: str | None = Form(
         default=None,
@@ -89,4 +97,9 @@ async def create_assessment(
     data = await file.read(MAX_CSV_BYTES + 1)
     levels = parse_csv_bytes(data)
 
-    return assess(levels, limit_db)
+    background = None
+    if background_file is not None:
+        background_data = await background_file.read(MAX_CSV_BYTES + 1)
+        background = parse_csv_bytes(background_data)
+
+    return assess(levels, limit_db, background)
