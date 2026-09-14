@@ -15,12 +15,10 @@ def make_csv(
     header: str = "frequency_hz,level_db",
     newline: str = "\r\n",
     order: list[int] | None = None,
-    trailing_blank_lines: int = 0,
 ) -> bytes:
     freqs = order if order is not None else list(FREQUENCIES_HZ)
     lines = [header]
     lines += [f"{f},{levels[f]}" for f in freqs]
-    lines += [""] * trailing_blank_lines
     return (newline.join(lines) + newline).encode("utf-8")
 
 

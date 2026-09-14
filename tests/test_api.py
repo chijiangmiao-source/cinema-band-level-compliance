@@ -226,7 +226,7 @@ def test_whole_file_validation_errors(client, payload, code):
 
 
 def test_oversized_file_rejected_with_413(client):
-    payload = make_csv(LEVELS, trailing_blank_lines=0)
+    payload = make_csv(LEVELS)
     payload += b"\n" * (MAX_CSV_BYTES + 1 - len(payload))
     response = post_assessment(client, payload, "100")
     assert response.status_code == 413
@@ -234,11 +234,27 @@ def test_oversized_file_rejected_with_413(client):
 
 
 def test_exactly_64_kib_file_accepted(client):
-    payload = make_csv(LEVELS)
-    payload += b"\n" * (MAX_CSV_BYTES - len(payload))  # blank lines are ignored
+    extra = MAX_CSV_BYTES - len(make_csv(LEVELS))
+    levels = dict(LEVELS)
+    levels[8000] = "75." + "0" * (extra - 1)  # pad with a zero fractional part
+    payload = make_csv(levels)
     assert len(payload) == MAX_CSV_BYTES
     response = post_assessment(client, payload, "140")
     assert response.status_code == 200
+
+
+@pytest.mark.parametrize("prefix", [b"\r\n", b"\n"])
+def test_empty_first_line_rejected(client, prefix):
+    response = post_assessment(client, prefix + make_csv(LEVELS), "100")
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "INVALID_HEADER"
+
+
+def test_blank_line_inside_file_rejected(client):
+    payload = make_csv(LEVELS).replace(b"\r\n500,88", b"\r\n\r\n500,88", 1)
+    response = post_assessment(client, payload, "100")
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "INVALID_ROW_COUNT"
 
 
 def test_missing_file_field_rejected(client):

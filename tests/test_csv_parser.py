@@ -48,18 +48,54 @@ def test_fractional_frequency_notation_accepted():
 
 def test_size_limit_is_64_kib_and_inclusive():
     assert MAX_CSV_BYTES == 64 * 1024
-    payload = build_csv()
-    padded = payload + b"\n" * (MAX_CSV_BYTES - len(payload))  # blank lines ignored
+    base = build_csv()
+    extra = MAX_CSV_BYTES - len(base)
+    # Pad the last level with a fractional part of zeros: still a finite
+    # plain decimal in range, so the file stays fully valid at exactly 64 KiB.
+    rows = CANONICAL_ROWS[:-1] + [(8000, "75." + "0" * (extra - 1))]
+    padded = build_csv(rows=rows)
     assert len(padded) == MAX_CSV_BYTES
-    assert parse_csv_bytes(padded)[1000] == Decimal("90")
+    assert parse_csv_bytes(padded)[8000] == Decimal("75")
 
 
 def test_one_byte_over_limit_rejected_with_413():
-    payload = build_csv() + b"\n" * (MAX_CSV_BYTES - len(build_csv()) + 1)
+    extra = MAX_CSV_BYTES - len(build_csv())
+    rows = CANONICAL_ROWS[:-1] + [(8000, "75." + "0" * extra)]  # one byte too many
+    payload = build_csv(rows=rows)
+    assert len(payload) == MAX_CSV_BYTES + 1
     with pytest.raises(ApiError) as exc_info:
         parse_csv_bytes(payload)
     assert exc_info.value.code == "FILE_TOO_LARGE"
     assert exc_info.value.status_code == 413
+
+
+@pytest.mark.parametrize(
+    "data",
+    [
+        b"\r\n" + build_csv(),  # blank first line (CRLF)
+        b"\n" + build_csv(),  # blank first line (LF)
+        b"\n",  # a single blank line and nothing else
+    ],
+    ids=["blank-first-line-crlf", "blank-first-line-lf", "single-blank-line"],
+)
+def test_blank_first_line_rejected(data):
+    assert error_code(data) == "INVALID_HEADER"
+
+
+def test_blank_line_among_data_rejected():
+    lines = build_csv().split(b"\r\n")
+    data = b"\r\n".join(lines[:4] + [b""] + lines[4:])  # 9 rows after header
+    assert error_code(data) == "INVALID_ROW_COUNT"
+
+
+def test_blank_line_replacing_data_row_rejected():
+    lines = build_csv().split(b"\r\n")  # [header, 8 data rows, trailing ""]
+    data = b"\r\n".join(lines[:5] + [b""] + lines[6:])  # 8 rows, one blank
+    assert error_code(data) == "INVALID_FIELD_COUNT"
+
+
+def test_trailing_blank_line_rejected():
+    assert error_code(build_csv() + b"\r\n") == "INVALID_ROW_COUNT"
 
 
 @pytest.mark.parametrize(

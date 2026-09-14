@@ -45,9 +45,10 @@ def parse_csv_bytes(data: bytes) -> dict[int, Decimal]:
             {"offset": exc.start},
         ) from exc
 
-    # Blank physical lines carry no data and are ignored; every other row must
-    # conform exactly.
-    rows = [row for row in csv.reader(io.StringIO(text)) if row]
+    # The file must consist of exactly the header line plus one row per
+    # band; a blank line anywhere (including the first line) is a
+    # structural error and rejects the whole file.
+    rows = list(csv.reader(io.StringIO(text)))
     if not rows:
         raise ApiError(
             422,
