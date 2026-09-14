@@ -11,7 +11,9 @@ Python 3.12 + FastAPI + Pydantic，通过 multipart 上传 CSV 与允许总声�
 - 可选背景扣除：上传 `background_file` 时，先按频带做线性能量相减
   `L'_i = 10 × log10( 10^(L_i/10) − 10^(B_i/10) )`，再以扣除后的有效声级 `L'_i`
   进入下述既有计权、合成、排序与裁决链路；任一频带背景能量 ≥ 主测量能量（即
-  `B_i >= L_i`）时整次请求拒绝（`BACKGROUND_NOT_LOWER`），不对非正能量取对数
+  `B_i >= L_i`）时整次请求拒绝（`BACKGROUND_NOT_LOWER`），不对非正能量取对数。
+  只要背景严格更低，无论差值多小（如 1e-20 dB）都按高精度十进制精确求值，
+  不会因浮点精度被误判为相等而拒绝
 - 每行计权级：`L_i + A_i`（十进制精确相加）
 - 总声级：`10 × log10( Σ 10^((L_i+A_i)/10) )`
 - 裁决：**始终以未舍入总值**与限值比较，`<=` 为 `COMPLIANT`，否则 `NON_COMPLIANT`
@@ -124,7 +126,7 @@ frequency_hz,level_db
 ```bash
 python3.12 -m venv .venv && source .venv/bin/activate
 pip install -r requirements-dev.txt
-pytest                 # 143 个用例：合法计算、临界裁决、整文件校验、背景扣除
+pytest                 # 148 个用例：合法计算、临界裁决、整文件校验、背景扣除
 uvicorn app.main:app --reload
 ```
 

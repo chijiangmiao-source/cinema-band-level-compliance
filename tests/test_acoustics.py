@@ -1,7 +1,7 @@
 """Unit tests for the acoustics core: weighting, summation, adjudication."""
 
 import math
-from decimal import Decimal
+from decimal import Decimal, localcontext
 
 import pytest
 
@@ -11,6 +11,7 @@ from app.acoustics import (
     band_energy,
     combine_levels,
     round_to_centidb,
+    subtract_background_db,
     verdict_for,
     weighted_level_db,
 )
@@ -72,6 +73,36 @@ def test_combine_matches_specification_formula():
         sum(10.0 ** (float(levels[f] + A_WEIGHTS_DB[f]) / 10.0) for f in levels)
     )
     assert combine_levels(levels) == pytest.approx(expected, abs=1e-9)
+
+
+def test_combine_levels_does_not_underflow_for_very_quiet_bands():
+    # Weighted levels around -3300 dB: 10**(w/10) underflows to 0.0 in
+    # float, but the total must still be computed, not crash on log10(0).
+    levels = {f: Decimal("-3300") for f in FREQUENCIES_HZ}
+    expected = -3300.0 + 10.0 * math.log10(
+        sum(10.0 ** (float(A_WEIGHTS_DB[f]) / 10.0) for f in FREQUENCIES_HZ)
+    )
+    assert combine_levels(levels) == pytest.approx(expected, abs=1e-9)
+
+
+def test_subtract_background_matches_spec_formula():
+    expected = 10.0 * math.log10(10.0**9 - 10.0**8.5)
+    result = subtract_background_db(Decimal("90"), Decimal("85"))
+    assert result == pytest.approx(expected, rel=1e-12)
+
+
+def test_subtract_background_gap_below_float_resolution():
+    # A 1e-20 dB gap: floats see both levels as exactly 90.0, yet the
+    # residual level must still be computed per the spec formula.
+    with localcontext() as ctx:
+        ctx.prec = 60
+        residual = Decimal(10) ** Decimal(9) - Decimal(10) ** (
+            Decimal("89.99999999999999999999") / 10
+        )
+        expected = float(10 * residual.log10())
+    result = subtract_background_db(Decimal("90"), Decimal("89.99999999999999999999"))
+    assert -117 < expected < -116  # sanity: tiny gap, deeply negative residual
+    assert result == pytest.approx(expected, rel=1e-12)
 
 
 def test_verdict_boundary_is_inclusive():

@@ -5,6 +5,7 @@ Expected values are recomputed from the specification formula in
 """
 
 import math
+from decimal import Decimal, localcontext
 
 import pytest
 
@@ -150,6 +151,57 @@ def test_background_not_lower_lists_every_offending_band(client):
         {"frequency_hz": 500, "level_db": 88.0, "background_db": 88.0},
         {"frequency_hz": 2000, "level_db": 86.0, "background_db": 90.0},
     ]
+
+
+def test_infinitesimal_background_gap_accepted(client):
+    """A background strictly below the measurement is accepted no matter
+    how small the gap; the residual level is computed exactly."""
+    background = dict(BACKGROUND)
+    background[1000] = "89.99999999999999999999"  # 1e-20 dB below the 90 dB measurement
+    response = post_assessment(client, make_csv(MAIN), "140", make_csv(background))
+
+    assert response.status_code == 200
+    body = response.json()
+    # Spec formula 10*log10(10**(L/10) - 10**(B/10)) in high-precision decimal.
+    with localcontext() as ctx:
+        ctx.prec = 60
+        residual = Decimal(10) ** Decimal(9) - Decimal(10) ** (
+            Decimal("89.99999999999999999999") / 10
+        )
+        expected_1000 = float(10 * residual.log10())
+    band = next(b for b in body["bands"] if b["frequency_hz"] == 1000)
+    assert band["corrected_level_db"] == pytest.approx(expected_1000, rel=1e-12)
+
+    corrected = corrected_levels(MAIN, BACKGROUND)
+    corrected[1000] = expected_1000
+    assert abs(body["total_db"] - expected_total_db(corrected)) <= 0.005 + 1e-9
+    assert [b["frequency_hz"] for b in body["bands"]] == expected_band_order(corrected)
+
+
+def test_vanishing_gap_all_bands_still_yields_finite_total(client):
+    """A ~1e-330 dB gap pushes corrected levels near -3300 dB; the total
+    must stay finite instead of underflowing to log10(0)."""
+    main = {f: "90" for f in FREQUENCIES_HZ}
+    background = {f: "89." + "9" * 330 for f in FREQUENCIES_HZ}
+    response = post_assessment(client, make_csv(main), "140", make_csv(background))
+
+    assert response.status_code == 200
+    body = response.json()
+    assert math.isfinite(body["total_db"])
+    with localcontext() as ctx:
+        ctx.prec = 400
+        residual = Decimal(10) ** Decimal(9) - Decimal(10) ** (
+            Decimal("89." + "9" * 330) / 10
+        )
+        expected = float(10 * residual.log10())
+    for band in body["bands"]:
+        assert band["corrected_level_db"] == pytest.approx(expected, rel=1e-9)
+    # All bands share one corrected level: total = level + 10*log10(sum 10**(A_i/10)).
+    expected_total = expected + 10.0 * math.log10(
+        sum(10.0 ** (float(A_WEIGHTS_DB[f]) / 10.0) for f in FREQUENCIES_HZ)
+    )
+    assert abs(body["total_db"] - expected_total) <= 0.005 + 1e-9
+    assert body["verdict"] == "COMPLIANT"
 
 
 def test_omitted_background_file_response_unchanged(client):

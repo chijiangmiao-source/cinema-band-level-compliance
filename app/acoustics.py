@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import math
-from decimal import ROUND_HALF_UP, Decimal
+from decimal import ROUND_HALF_UP, Decimal, localcontext
 
 # A-weighting corrections (dB) for each octave-band centre frequency (Hz).
 A_WEIGHTS_DB: dict[int, Decimal] = {
@@ -19,8 +19,6 @@ A_WEIGHTS_DB: dict[int, Decimal] = {
 
 FREQUENCIES_HZ: tuple[int, ...] = tuple(A_WEIGHTS_DB)
 
-_LN10 = math.log(10.0)
-
 
 def weighted_level_db(level_db: Decimal, frequency_hz: int) -> Decimal:
     """L_i + A_i for one band, computed with exact decimal arithmetic."""
@@ -32,30 +30,47 @@ def band_energy(weighted_db: Decimal) -> float:
     return 10.0 ** (float(weighted_db) / 10.0)
 
 
-def subtract_background_db(level_db: Decimal, background_db: Decimal) -> float | None:
+def subtract_background_db(level_db: Decimal, background_db: Decimal) -> float:
     """Residual band level after subtracting the background's linear energy:
     10*log10(10**(L/10) - 10**(B/10)). Requires B < L.
 
-    Computed as L + 10*log10(1 - 10**((B-L)/10)) via expm1, which stays
-    accurate when L and B are close. Returns None when the two levels are
-    indistinguishable at float resolution, i.e. there is no positive
-    residual energy to take the logarithm of.
+    Computed as L + 10*log10(1 - 10**((B-L)/10)) in decimal arithmetic whose
+    precision scales with the gap between the two levels, so any strictly
+    positive gap stays meaningful — floats would collapse a gap below
+    ~1e-16 to zero and wrongly suggest a non-positive residual energy.
     """
-    level = float(level_db)
-    background = float(background_db)
-    residual_ratio = -math.expm1((background - level) * (_LN10 / 10.0))
-    if residual_ratio <= 0.0:
-        return None
-    return level + 10.0 * math.log10(residual_ratio)
+    # Digit budget for the exact difference of the two inputs: from the
+    # highest significant digit down to the lowest one, plus guard.
+    span = (
+        max(level_db.adjusted(), background_db.adjusted())
+        - min(level_db.as_tuple().exponent, background_db.as_tuple().exponent)
+        + 2
+    )
+    with localcontext() as ctx:
+        ctx.prec = max(28, span)
+        delta = (background_db - level_db) / 10  # strictly negative, exact
+        # 1 - 10**delta first differs from 1 around digit -delta.adjusted();
+        # keep ~25 significant digits beyond that for a float-exact result.
+        ctx.prec = max(ctx.prec, 25 - delta.adjusted())
+        residual_ratio = 1 - (delta * Decimal(10).ln()).exp()
+        corrected = level_db + 10 * residual_ratio.log10()
+    return float(corrected)
 
 
 def combine_levels(levels_db: dict[int, Decimal]) -> float:
-    """Total level 10*log10(sum 10**((L_i+A_i)/10)); never rounded here."""
-    total_energy = sum(
-        band_energy(weighted_level_db(level, frequency))
+    """Total level 10*log10(sum 10**((L_i+A_i)/10)); never rounded here.
+
+    Evaluated as peak + 10*log10(sum 10**((w_i-peak)/10)): identical in
+    exact arithmetic, but bands far below the loudest (possible after
+    background subtraction) cannot underflow the sum to zero.
+    """
+    weighted = [
+        float(weighted_level_db(level, frequency))
         for frequency, level in levels_db.items()
-    )
-    return 10.0 * math.log10(total_energy)
+    ]
+    peak = max(weighted)
+    total_energy = sum(10.0 ** ((w - peak) / 10.0) for w in weighted)
+    return peak + 10.0 * math.log10(total_energy)
 
 
 def verdict_for(total_db: float, limit_db: float) -> str:

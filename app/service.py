@@ -79,20 +79,9 @@ def _subtract_background(
     """Per-band linear energy subtraction. The whole request is rejected
     unless the background is strictly quieter than the measurement in
     every band; otherwise there is no positive residual energy to take
-    the logarithm of."""
-    failures: list[int] = []
-    corrected: dict[int, float] = {}
-    for frequency in FREQUENCIES_HZ:
-        residual = None
-        if background_db[frequency] < levels_db[frequency]:
-            residual = subtract_background_db(
-                levels_db[frequency], background_db[frequency]
-            )
-        if residual is None:
-            failures.append(frequency)
-        else:
-            corrected[frequency] = residual
-
+    the logarithm of. Any strictly positive gap, however small, yields a
+    valid residual level."""
+    failures = [f for f in FREQUENCIES_HZ if background_db[f] >= levels_db[f]]
     if failures:
         raise ApiError(
             422,
@@ -111,4 +100,7 @@ def _subtract_background(
                 ]
             },
         )
-    return corrected
+    return {
+        f: subtract_background_db(levels_db[f], background_db[f])
+        for f in FREQUENCIES_HZ
+    }
